@@ -1347,16 +1347,25 @@ class ProxyDaemon:
         media_id = request.match_info["media_id"]
         file_name = request.match_info.get("file_name")
 
+        # Resolve the pan client once, if the request is authenticated
+        access_token = self.get_access_token(request)
+        client = await self._find_client(access_token) if access_token else None
+
         try:
             response, decrypted_file = await self._load_decrypted_file(
                 server_name, media_id, file_name
             )
 
             if response is None and decrypted_file is None:
+                if client:
+                    return await self.forward_to_web(request, token=client.access_token)
                 return await self.forward_to_web(request)
+
         except ClientConnectionError as e:
             return web.Response(status=500, text=str(e))
         except KeyError:
+            if client:
+                return await self.forward_to_web(request, token=client.access_token)
             return await self.forward_to_web(request)
 
         if not isinstance(response, DownloadResponse):

@@ -66,10 +66,13 @@ async def init(data_dir, server_conf, send_queue, recv_queue):
 
     app.add_routes(
         [
+            # Authentication
             web.post("/_matrix/client/r0/login", proxy.login),
             web.post("/_matrix/client/v3/login", proxy.login),
+            # Syncing
             web.get("/_matrix/client/r0/sync", proxy.sync),
             web.get("/_matrix/client/v3/sync", proxy.sync),
+            # Rooms
             web.post("/_matrix/client/r0/createRoom", proxy.createRoom),
             web.post("/_matrix/client/v3/createRoom", proxy.createRoom),
             web.get("/_matrix/client/r0/rooms/{room_id}/messages", proxy.messages),
@@ -86,19 +89,53 @@ async def init(data_dir, server_conf, send_queue, recv_queue):
                 r"/_matrix/client/r0/rooms/{room_id}/send/{event_type}",
                 proxy.send_message,
             ),
+            # Filters
             web.post("/_matrix/client/r0/user/{user_id}/filter", proxy.filter),
             web.post("/_matrix/client/v3/user/{user_id}/filter", proxy.filter),
+            # Well-known
             web.post("/.well-known/matrix/client", proxy.well_known),
             web.get("/.well-known/matrix/client", proxy.well_known),
+            # Search
             web.post("/_matrix/client/r0/search", proxy.search),
             web.post("/_matrix/client/v3/search", proxy.search),
             web.options("/_matrix/client/r0/search", proxy.search_opts),
             web.options("/_matrix/client/v3/search", proxy.search_opts),
+            # Media download — authenticated media routes (MSC3916)
             web.get(
-                "/_matrix/media/v1/download/{server_name}/{media_id}", proxy.download
+                "/_matrix/client/v1/media/download/{server_name}/{media_id}",
+                proxy.download,
             ),
             web.get(
-                "/_matrix/media/v3/download/{server_name}/{media_id}", proxy.download
+                "/_matrix/client/v3/media/download/{server_name}/{media_id}",
+                proxy.download,
+            ),
+            web.get(
+                "/_matrix/client/v1/media/download/{server_name}/{media_id}"
+                "/{file_name}",
+                proxy.download,
+            ),
+            web.get(
+                "/_matrix/client/v3/media/download/{server_name}/{media_id}"
+                "/{file_name}",
+                proxy.download,
+            ),
+            # Media download — legacy client API routes (pre-MSC3916)
+            web.get(
+                "/_matrix/client/r0/media/download/{server_name}/{media_id}",
+                proxy.download,
+            ),
+            web.get(
+                "/_matrix/client/r0/media/download/{server_name}/{media_id}"
+                "/{file_name}",
+                proxy.download,
+            ),
+            # Media download — legacy media repository routes
+            web.get("/_matrix/media/r0/download/{server_name}/{media_id}", proxy.download),
+            web.get("/_matrix/media/v1/download/{server_name}/{media_id}", proxy.download),
+            web.get("/_matrix/media/v3/download/{server_name}/{media_id}", proxy.download),
+            web.get(
+                "/_matrix/media/r0/download/{server_name}/{media_id}/{file_name}",
+                proxy.download,
             ),
             web.get(
                 "/_matrix/media/v1/download/{server_name}/{media_id}/{file_name}",
@@ -108,13 +145,16 @@ async def init(data_dir, server_conf, send_queue, recv_queue):
                 "/_matrix/media/v3/download/{server_name}/{media_id}/{file_name}",
                 proxy.download,
             ),
-            web.get(
-                "/_matrix/media/r0/download/{server_name}/{media_id}", proxy.download
+            # Media upload — authenticated media routes (MSC3916)
+            web.post(
+                r"/_matrix/client/r0/media/upload",
+                proxy.upload,
             ),
-            web.get(
-                "/_matrix/media/r0/download/{server_name}/{media_id}/{file_name}",
-                proxy.download,
+            web.post(
+                r"/_matrix/client/v3/media/upload",
+                proxy.upload,
             ),
+            # Media upload — legacy media repository routes
             web.post(
                 r"/_matrix/media/r0/upload",
                 proxy.upload,
@@ -123,6 +163,7 @@ async def init(data_dir, server_conf, send_queue, recv_queue):
                 r"/_matrix/media/v3/upload",
                 proxy.upload,
             ),
+            # Profile avatar upload
             web.put(
                 r"/_matrix/client/r0/profile/{userId}/avatar_url",
                 proxy.profile,
@@ -133,6 +174,8 @@ async def init(data_dir, server_conf, send_queue, recv_queue):
             ),
         ]
     )
+    
+    # Catch-all route for everything else
     app.router.add_route("*", "/" + "{proxyPath:.*}", proxy.router)
     app.on_shutdown.append(proxy.shutdown)
 
