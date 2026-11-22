@@ -40,6 +40,7 @@ setup(
         "click >= 7.1.2",
         "keyring >= 21.2.1",
         "logbook >= 1.5.3",
+        "cryptography >= 3.1",
         "peewee >= 3.13.1",
         "janus >= 0.5",
         "cachetools >= 3.0.0",
