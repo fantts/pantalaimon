@@ -149,6 +149,29 @@ To control the daemon an interactive utility is provided in the form of
 session keys, or to introspect devices of users that we share encrypted rooms
 with.
 
+### Testing the floe media decryption (MSC4571)
+
+The `floe` module is standalone and its test battery is fully synthetic
+(encrypt→decrypt roundtrips, header/auth tampering checks) — no matrix
+account, no keys, no network needed:
+
+```sh
+pip install pytest cryptography           # only direct dependencies
+pytest tests/floe_test.py --noconftest    # 14 tests, should pass in ~0.1s
+```
+
+Use `--noconftest`: the tests/ `conftest.py` pulls in the full daemon
+dependency set (janus, aiohttp, peewee, …), which is not needed for the
+cryptography battery.
+
+For a quick interactive sanity check you can also import the module directly:
+`FloeEncryptor` + `decrypt_floe_attachment` round-trip an arbitrary payload
+in under a dozen lines (see the docstring of `pantalaimon/floe.py` for the
+key/header layout). To use floe decryption for real, connect your client
+through this proxy; media encrypted by bridges that run
+`mautrix-whatsapp ≥ v26.11` with `direct_media.encrypted` enabled decrypts
+transparently on the way out of the proxy.
+
 ### Setup
 This is all coming from an excellent comment that you can find [here](https://github.com/matrix-org/pantalaimon/issues/154#issuecomment-1951591191).
 
