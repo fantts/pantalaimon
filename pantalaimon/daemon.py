@@ -41,6 +41,13 @@ from nio import (
 )
 from nio.crypto import decrypt_attachment
 
+# floe (MSC4571): optional decryptor — if the module is missing (e.g. a
+# partial install), degrade to plain forwarding instead of crashing the daemon.
+try:
+    from pantalaimon.floe import decrypt_floe_attachment
+except ImportError:  # pragma: no cover
+    decrypt_floe_attachment = None
+
 from pantalaimon.client import (
     SEARCH_TERMS_SCHEMA,
     InvalidLimit,
@@ -1281,6 +1288,44 @@ class ProxyDaemon:
                 return None, None
 
             self.media_info[(server_name, media_id)] = media_info
+
+        # floe (MSC4571): MediaInfo(key={"v": "floe", ...}) — decrypt here,
+        # BEFORE the megolm path, which would KeyError on key["k"].
+        if isinstance(media_info.key, dict) and media_info.key.get("v") == "floe":
+            if decrypt_floe_attachment is None:
+                logger.warn(
+                    f"pantalaimon.floe unavailable — forwarding "
+                    f"{server_name}/{media_id} without decryption"
+                )
+                return None, None
+            if not self.pan_clients:
+                return None, None
+
+            client = next(iter(self.pan_clients.values()))
+
+            try:
+                response = await client.download(
+                    server_name=server_name, media_id=media_id, filename=file_name
+                )
+            except ClientConnectionError:
+                raise
+
+            if not isinstance(response, DownloadResponse):
+                return response, None
+
+            logger.info(f"Decrypting floe media {server_name}/{media_id}")
+
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ProcessPoolExecutor() as pool:
+                decrypted_file = await loop.run_in_executor(
+                    pool,
+                    decrypt_floe_attachment,
+                    response.body,
+                    media_info.key.get("floe_key"),
+                    media_info.key.get("floe_header"),
+                )
+
+            return response, decrypted_file
 
         try:
             key = media_info.key["k"]

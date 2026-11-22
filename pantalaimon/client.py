@@ -49,6 +49,7 @@ from nio import (
 )
 from nio.crypto import Sas
 from nio.store import SqliteStore
+from nio import BadEvent
 
 from pantalaimon.index import INDEXING_ENABLED
 from pantalaimon.log import logger
@@ -117,6 +118,29 @@ Validator = extend_with_default(Draft4Validator)
 def validate_json(instance, schema):
     """Validate a dictionary using the provided json schema."""
     Validator(schema, format_checker=FormatChecker()).validate(instance)
+
+
+def decoded_floe_file(source):
+    """Return the floe (MSC4571) file structure from a decrypted event source.
+
+    When nio rejects the floe media schema it hands back a BadEvent, but the
+    decrypted ``source`` is left intact — this extracts the needed fields
+    from it, or None if the event does not carry floe media."""
+    if not isinstance(source, dict):
+        return None
+    content = source.get("content")
+    if not isinstance(content, dict):
+        return None
+    floe_file = content.get("file")
+    if (
+        isinstance(floe_file, dict)
+        and floe_file.get("v") == "com.beeper.floe.v1"
+        and floe_file.get("url")
+        and floe_file.get("floe_header")
+        and floe_file.get("floe_key")
+    ):
+        return floe_file
+    return None
 
 
 class UnknownRoomError(Exception):
@@ -283,6 +307,39 @@ class PanClient(AsyncClient):
         logger.info(f"Adding media info for {mxc_server}/{mxc_path} to the store")
 
         media = MediaInfo(mxc_server, mxc_path, event.key, event.iv, event.hashes)
+        self.media_info[(mxc_server, mxc_path)] = media
+        self.pan_store.save_media(self.server_name, media)
+
+    def store_floe_event_media(self, floe_file):
+        # floe (MSC4571): the key and the self-authenticating header live in
+        # the event itself, the blob at the mxc URL holds only segments.
+        # MediaInfo(key=JSON, iv="", hashes={}) — the daemon's download path
+        # dispatches on key["v"] == "floe" to pick the decryptor, and the
+        # megolm path is untouched.
+        try:
+            mxc = urlparse(floe_file.get("url", ""))
+        except ValueError:
+            return
+
+        mxc_server = mxc.netloc.strip("/")
+        mxc_path = mxc.path.strip("/")
+
+        if not mxc_path:
+            return
+
+        logger.info(f"Adding floe media info for {mxc_server}/{mxc_path} to the store")
+
+        media = MediaInfo(
+            mxc_server,
+            mxc_path,
+            {
+                "v": "floe",
+                "floe_header": floe_file.get("floe_header"),
+                "floe_key": floe_file.get("floe_key"),
+            },
+            "",
+            {},
+        )
         self.media_info[(mxc_server, mxc_path)] = media
         self.pan_store.save_media(self.server_name, media)
 
@@ -838,6 +895,16 @@ class PanClient(AsyncClient):
                     decrypted_event.source["content"]["info"]["thumbnail_url"] = (
                         decrypted_event.thumbnail_url
                     )
+
+            elif isinstance(decrypted_event, BadEvent):
+                # floe (MSC4571): nio rejects the media schema and returns a
+                # BadEvent, but the decrypted source is intact — hoist the
+                # URL and store the key so the media proxy can decrypt (the
+                # same thing store_event_media does for megolm media).
+                floe_file = decoded_floe_file(decrypted_event.source)
+                if floe_file:
+                    self.store_floe_event_media(floe_file)
+                    decrypted_event.source["content"]["url"] = floe_file["url"]
 
             event_dict.update(decrypted_event.source)
             event_dict["decrypted"] = True
