@@ -4,6 +4,7 @@ import os
 import pytest
 
 from pantalaimon.floe import (
+    ENC_SEG_LEN,
     FloeDecryptor,
     FloeEncryptor,
     PT_SEG_LEN,
@@ -75,3 +76,33 @@ def test_segment_sequence_enforced(key_b64):
     dec.decrypt_segment(blob[4096:])          # last
     with pytest.raises(ValueError):           # decryptor is closed now
         dec.decrypt_segment(blob[4096:])
+
+
+def test_truncation_never_returns_partial(key_b64):
+    """A cut download must raise, never return a silent partial file.
+
+    Both failure modes matter: a cut inside a segment is caught by the
+    segment-length check, but a cut landing exactly on an intermediate
+    segment boundary ends the loop without the final segment (and so does
+    an empty body) — those need the explicit closed-flag check."""
+    enc = FloeEncryptor(key_b64, floe_iv=FIXED_IV)
+    blob = enc.encrypt(os.urandom(3 * PT_SEG_LEN + 100))
+
+    with pytest.raises(ValueError):  # cut inside a segment
+        FloeDecryptor(key_b64, enc.header_b64).decrypt(blob[: 2 * ENC_SEG_LEN - 7])
+    with pytest.raises(ValueError):  # cut exactly at a segment boundary
+        FloeDecryptor(key_b64, enc.header_b64).decrypt(blob[:ENC_SEG_LEN])
+    with pytest.raises(ValueError):  # empty body: not even one segment
+        FloeDecryptor(key_b64, enc.header_b64).decrypt(b"")
+
+
+def test_b64_alphabets_interchangeable(key_b64):
+    """floe_key/floe_header may arrive url-safe (-_) instead of standard (+/)."""
+    pt = os.urandom(PT_SEG_LEN + 5)
+    enc = FloeEncryptor(key_b64, floe_iv=FIXED_IV)
+    blob, header = enc.encrypt(pt), enc.header_b64
+
+    swapped = header.translate(str.maketrans("+/", "-_"))
+    if swapped == header:
+        pytest.skip("header b64 has no +/- chars to swap")
+    assert FloeDecryptor(key_b64, swapped).decrypt(blob) == pt

@@ -77,7 +77,9 @@ def _params_encoded():
 
 
 def _b64dec(s):
-    return base64.b64decode(s + "=" * (-len(s) % 4))
+    # Accept both standard and url-safe base64: some bridges serialize
+    # floe_key/floe_header with "-" and "_" alphabet letters.
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
 def _kdf(prk, floe_iv, purpose, aad, length):
@@ -171,6 +173,10 @@ class FloeDecryptor:
                 raise ValueError("truncated blob")
             out += self.decrypt_segment(seg)
             pos += seg_len
+        # A cut landing exactly on an intermediate segment boundary ends the
+        # loop without the final segment: refuse to return a partial file.
+        if not self.closed:
+            raise ValueError("truncated blob (final segment never arrived)")
         return out
 
 

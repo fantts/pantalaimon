@@ -96,6 +96,21 @@ class NotDecryptedAvailableError(Exception):
     pass
 
 
+# Persistent process pool for media decryption: the upstream pattern (a
+# fresh ProcessPoolExecutor per download) pays a fork/spawn on every file
+# — streams, stickers, voice notes — which is a river on busy bridges.
+# Created on demand; 2 workers (decryption is CPU-bound, serializing is
+# better than ballooning RAM).
+_media_pool = None
+
+
+def _media_executor():
+    global _media_pool
+    if _media_pool is None:
+        _media_pool = concurrent.futures.ProcessPoolExecutor(max_workers=2)
+    return _media_pool
+
+
 @attr.s
 class ProxyDaemon:
     name = attr.ib()
@@ -1310,20 +1325,27 @@ class ProxyDaemon:
             except ClientConnectionError:
                 raise
 
+            if not (media_info.key.get("floe_key") and media_info.key.get("floe_header")):
+                logger.warn(
+                    f"incomplete floe MediaInfo (missing key/header) — forwarding "
+                    f"without decrypting {server_name}/{media_id}"
+                )
+                return response, None
+
             if not isinstance(response, DownloadResponse):
                 return response, None
 
             logger.info(f"Decrypting floe media {server_name}/{media_id}")
 
             loop = asyncio.get_running_loop()
-            with concurrent.futures.ProcessPoolExecutor() as pool:
-                decrypted_file = await loop.run_in_executor(
-                    pool,
-                    decrypt_floe_attachment,
-                    response.body,
-                    media_info.key.get("floe_key"),
-                    media_info.key.get("floe_header"),
-                )
+            pool = _media_executor()
+            decrypted_file = await loop.run_in_executor(
+                pool,
+                decrypt_floe_attachment,
+                response.body,
+                media_info.key.get("floe_key"),
+                media_info.key.get("floe_header"),
+            )
 
             return response, decrypted_file
 
@@ -1353,10 +1375,10 @@ class ProxyDaemon:
         logger.info(f"Decrypting media {server_name}/{media_id}")
 
         loop = asyncio.get_running_loop()
-        with concurrent.futures.ProcessPoolExecutor() as pool:
-            decrypted_file = await loop.run_in_executor(
-                pool, decrypt_attachment, response.body, key, hash, media_info.iv
-            )
+        pool = _media_executor()
+        decrypted_file = await loop.run_in_executor(
+            pool, decrypt_attachment, response.body, key, hash, media_info.iv
+        )
 
         return response, decrypted_file
 
